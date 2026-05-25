@@ -75,7 +75,10 @@ balloc(uint dev)
     bp = bread(dev, BBLOCK(b, sb));
     for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
       m = 1 << (bi % 8);
+      
       if((bp->data[bi/8] & m) == 0){  // Is block free?
+        if(b + bi >= SWAPBASE && b + bi < SWAPBASE + SWAPMAX)
+          continue;
         bp->data[bi/8] |= m;  // Mark block in use.
         log_write(bp);
         brelse(bp);

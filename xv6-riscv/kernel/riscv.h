@@ -372,6 +372,8 @@ struct page{
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // user can access
+#define PTE_A (1L << 6) // accessed (hardware sets this)
+#define PTE_S (1L << 8) // swapped out (software RSW bit)
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
@@ -390,4 +392,6 @@ struct page{
 // Sv39, to avoid having to sign-extend virtual addresses
 // that have the high bit set.
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
+#define PTE_SWAPSLOT(pte)  ((pte) >> 10)
+#define PTE_MKSWAP(slot, flags) (((uint64)(slot) << 10) | (flags))
 

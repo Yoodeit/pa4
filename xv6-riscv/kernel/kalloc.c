@@ -6,8 +6,10 @@
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
-#include "riscv.h"
+#include "riscv.h"  
+#include "proc.h"
 #include "defs.h"
+
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -82,6 +84,23 @@ kalloc(void)
   if(r)
     kmem.freelist = r->next;
   release(&kmem.lock);
+
+  if(r == 0){
+    // swap_out() does disk I/O which sleeps.
+    // If caller holds a spinlock, we can't sleep.
+    // Check noff: after push_off, noff==1 means no other locks held.
+    push_off();
+    int held = mycpu()->noff;
+    pop_off();
+
+    if(held == 1){
+      uint64 pa = swap_out();
+      if(pa != 0)
+        r = (struct run*)pa;
+    }
+    if(r == 0)
+      return 0;
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk

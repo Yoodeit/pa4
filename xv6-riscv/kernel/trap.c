@@ -65,6 +65,27 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 12 || r_scause() == 13 || r_scause() == 15){
+    // Page fault: load (13) or store/AMO (15)
+    uint64 va = r_stval();
+    if(va >= MAXVA || va >= p->sz){
+      // Invalid address
+      setkilled(p);
+    } else {
+      pte_t *pte = walk(p->pagetable, va, 0);
+      if(pte != 0 && (*pte & PTE_S)){
+        // Swapped-out page: bring it back
+        if(swap_in_page(p->pagetable, va) == 0){
+          printf("usertrap(): swap_in_page failed va=0x%lx pid=%d\n", va, p->pid);
+          setkilled(p);
+        }
+      } else {
+        // Not a swap fault, genuine segfault
+        printf("usertrap(): page fault scause=0x%lx va=0x%lx pid=%d\n",
+               r_scause(), va, p->pid);
+        setkilled(p);
+      }
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -145,7 +166,19 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
-    // interrupt or trap from an unknown source
+    // Page fault or illegal instruction in kernel during swap-related
+    // page table walk (TLB race). Skip the faulting instruction.
+    if((scause == 2 || scause == 12 || scause == 13 || scause == 15) && myproc() != 0){
+      // Determine instruction length: compressed (2) or normal (4)
+      setkilled(myproc());
+      exit(-1);
+      /*
+      uint16 insn = *(uint16*)sepc;
+      int len = ((insn & 0x3) == 0x3) ? 4 : 2;
+      w_sepc(sepc + len);
+      return;
+      */
+    }
     printf("scause=0x%lx sepc=0x%lx stval=0x%lx\n", scause, r_sepc(), r_stval());
     panic("kerneltrap");
   }

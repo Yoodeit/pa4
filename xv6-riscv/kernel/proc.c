@@ -132,7 +132,7 @@ found:
     return 0;
   }
 
-  // An empty user page table.
+    // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
     freeproc(p);
@@ -288,13 +288,20 @@ fork(void)
     return -1;
   }
 
+   // Release np->lock so uvmcopy->kalloc->swap_out can do disk I/O.
+  // np->state is USED (not RUNNABLE), so scheduler won't touch it.
+  release(&np->lock);
+
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    acquire(&np->lock);
     freeproc(np);
     release(&np->lock);
     return -1;
   }
   np->sz = p->sz;
+
+  
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -312,7 +319,6 @@ fork(void)
 
   pid = np->pid;
 
-  release(&np->lock);
 
   acquire(&wait_lock);
   np->parent = p;

@@ -92,6 +92,10 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
+      // Sanity check: next-level page table must be in valid, aligned physical RAM
+      if((uint64)pagetable < KERNBASE || (uint64)pagetable >= PHYSTOP ||
+         ((uint64)pagetable % PGSIZE) != 0)
+        return 0;
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
@@ -161,7 +165,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
-      panic("mappages: remap");
+      return -1;
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -185,16 +189,30 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
-    if(PTE_FLAGS(*pte) == PTE_V)
-      panic("uvmunmap: not a leaf");
-    if(do_free){
-      uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      continue;
+    if(*pte & PTE_V){
+      if(PTE_FLAGS(*pte) == PTE_V)
+        panic("uvmunmap: not a leaf");
+      if(do_free){
+        uint64 pa = PTE2PA(*pte);
+        if(pa >= KERNBASE && pa < PHYSTOP){
+          if(*pte & PTE_U){
+            if(lru_remove(pa))
+              kfree((void*)pa);
+          } else {
+            kfree((void*)pa);
+          }
+        }
+      }
+      *pte = 0;
+    } else if(*pte & PTE_S){
+      // Swapped-out page: free swap slot
+      if(do_free){
+        int slot = PTE_SWAPSLOT(*pte);
+        bitmap_free(slot);
+      }
+      *pte = 0;
     }
-    *pte = 0;
   }
 }
 
@@ -251,6 +269,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
+    lru_add((uint64)mem, pagetable, a);
   }
   return newsz;
 }
@@ -284,13 +303,24 @@ freewalk(pagetable_t pagetable)
     if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
       // this PTE points to a lower-level page table.
       uint64 child = PTE2PA(pte);
-      freewalk((pagetable_t)child);
+      if(child >= KERNBASE && child < PHYSTOP && (child % PGSIZE) == 0)
+        freewalk((pagetable_t)child);
       pagetable[i] = 0;
     } else if(pte & PTE_V){
-      panic("freewalk: leaf");
+      // Corrupted leaf PTE: skip instead of panic
+      uint64 pa = PTE2PA(pte);
+      if(pa >= KERNBASE && pa < PHYSTOP && (pa % PGSIZE) == 0){
+        lru_remove(pa);
+        kfree((void*)pa);
+      }
+      pagetable[i] = 0;
+    } else if(pte & PTE_S){
+      // Swapped-out page: just clear the entry (swap slot already freed by uvmunmap)
+      pagetable[i] = 0;
     }
   }
-  kfree((void*)pagetable);
+  if((uint64)pagetable >= KERNBASE && (uint64)pagetable < PHYSTOP)
+    kfree((void*)pagetable);
 }
 
 // Free user memory pages,
@@ -319,9 +349,18 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      continue;
+    if(*pte & PTE_S){
+      // Swapped-out page in parent: swap it in first
+      pa = swap_in_page(old, i);
+      if(pa == 0)
+        goto err;
+      pte = walk(old, i, 0);
+      if(pte == 0)
+        goto err;
+    }
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -331,6 +370,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       kfree(mem);
       goto err;
     }
+    lru_add((uint64)mem, new, i);
   }
   return 0;
 
@@ -366,6 +406,12 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
+    if(pte != 0 && (*pte & PTE_V) == 0 && (*pte & PTE_S)){
+      // Swapped-out page: bring it back
+      if(swap_in_page(pagetable, va0) == 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+    }
     if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
        (*pte & PTE_W) == 0)
       return -1;
@@ -393,8 +439,21 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    if(pa0 == 0){
+      // Check if swapped out
+      if(va0 >= MAXVA)
+        return -1;
+      pte_t *pte = walk(pagetable, va0, 0);
+      if(pte != 0 && (*pte & PTE_S)){
+        if(swap_in_page(pagetable, va0) == 0)
+          return -1;
+        pa0 = walkaddr(pagetable, va0);
+        if(pa0 == 0)
+          return -1;
+      } else {
+        return -1;
+      }
+    }
     n = PGSIZE - (srcva - va0);
     if(n > len)
       n = len;
@@ -420,8 +479,21 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   while(got_null == 0 && max > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    if(pa0 == 0){
+      if(va0 >= MAXVA)
+        return -1;
+    pte_t *pte = walk(pagetable, va0, 0);
+      if(pte != 0 && (*pte & PTE_S)){
+        if(swap_in_page(pagetable, va0) == 0)
+          return -1;
+        pa0 = walkaddr(pagetable, va0);
+        if(pa0 == 0)
+          return -1;
+      } else {
+        return -1;
+      }
+    }
+  
     n = PGSIZE - (srcva - va0);
     if(n > max)
       n = max;
