@@ -166,19 +166,6 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
-    // Page fault or illegal instruction in kernel during swap-related
-    // page table walk (TLB race). Skip the faulting instruction.
-    if((scause == 2 || scause == 12 || scause == 13 || scause == 15) && myproc() != 0){
-      // Determine instruction length: compressed (2) or normal (4)
-      setkilled(myproc());
-      exit(-1);
-      /*
-      uint16 insn = *(uint16*)sepc;
-      int len = ((insn & 0x3) == 0x3) ? 4 : 2;
-      w_sepc(sepc + len);
-      return;
-      */
-    }
     printf("scause=0x%lx sepc=0x%lx stval=0x%lx\n", scause, r_sepc(), r_stval());
     panic("kerneltrap");
   }
@@ -248,4 +235,3 @@ devintr()
     return 0;
   }
 }
-
