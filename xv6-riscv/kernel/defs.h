@@ -53,7 +53,6 @@ int             readi(struct inode*, int, uint64, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, int, uint64, uint, uint);
 void            itrunc(struct inode*);
-// pa5: function defs
 void swapread(uint64 ptr, int blkno);
 void swapwrite(uint64 ptr, int blkno);
 
@@ -67,7 +66,6 @@ void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
 
-// swap.c
 void            swap_init(void);
 void            lru_init(void);
 void            lru_add(uint64, pagetable_t, uint64);

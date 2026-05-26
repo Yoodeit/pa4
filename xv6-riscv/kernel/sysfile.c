@@ -504,7 +504,6 @@ sys_pipe(void)
   return 0;
 }
 
-// pa4: swap functions sysfile
 uint64 
 sys_swapread(void)
 {

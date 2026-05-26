@@ -66,21 +66,17 @@ usertrap(void)
 
     syscall();
   } else if(r_scause() == 12 || r_scause() == 13 || r_scause() == 15){
-    // Page fault: load (13) or store/AMO (15)
     uint64 va = r_stval();
     if(va >= MAXVA || va >= p->sz){
-      // Invalid address
       setkilled(p);
     } else {
       pte_t *pte = walk(p->pagetable, va, 0);
       if(pte != 0 && (*pte & PTE_S)){
-        // Swapped-out page: bring it back
         if(swap_in_page(p->pagetable, va) == 0){
           printf("usertrap(): swap_in_page failed va=0x%lx pid=%d\n", va, p->pid);
           setkilled(p);
         }
       } else {
-        // Not a swap fault, genuine segfault
         printf("usertrap(): page fault scause=0x%lx va=0x%lx pid=%d\n",
                r_scause(), va, p->pid);
         setkilled(p);
@@ -236,4 +232,3 @@ devintr()
     return 0;
   }
 }
-

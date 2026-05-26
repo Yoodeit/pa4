@@ -699,7 +699,6 @@ nameiparent(char *path, char *name)
   return namex(path, 1, name);
 }
 
-// pa4: swapread
 void
 swapread(uint64 ptr, int blkno)
 {
@@ -720,7 +719,6 @@ swapread(uint64 ptr, int blkno)
   }
 }
 
-// pa4: swapwrite
 void
 swapwrite(uint64 ptr, int blkno)
 {

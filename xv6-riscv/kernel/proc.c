@@ -315,8 +315,6 @@ fork(void)
 
   pid = np->pid;
 
-  //release(&np->lock);
-
   acquire(&wait_lock);
   np->parent = p;
   release(&wait_lock);

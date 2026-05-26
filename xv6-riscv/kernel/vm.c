@@ -197,7 +197,6 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       }
       *pte = 0;
     } else if(*pte & PTE_S){
-      // Swapped-out page: free swap slot
       if(do_free){
         int slot = PTE_SWAPSLOT(*pte);
         bitmap_free(slot);
@@ -300,7 +299,6 @@ freewalk(pagetable_t pagetable)
     } else if(pte & PTE_V){
       panic("freewalk: leaf");
     } else if(pte & PTE_S){
-      // Swapped-out page: just clear the entry (swap slot already freed by uvmunmap)
       pagetable[i] = 0;
     }
   }
@@ -335,7 +333,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((pte = walk(old, i, 0)) == 0)
       continue;
     if(*pte & PTE_S){
-      // Swapped-out page in parent: swap it in first
       pa = swap_in_page(old, i);
       if(pa == 0)
         goto err;
