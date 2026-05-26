@@ -7,6 +7,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "riscv.h"
+#include "proc.h"
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
@@ -23,7 +24,6 @@ struct {
   struct run *freelist;
 } kmem;
 
-// pa4: struct for page control
 struct page pages[PHYSTOP/PGSIZE];
 struct page *page_lru_head;
 int num_free_pages;
@@ -57,7 +57,6 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
@@ -71,7 +70,6 @@ kfree(void *pa)
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
-// pa4: kalloc function
 void *
 kalloc(void)
 {
@@ -83,7 +81,23 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
+  if(r == 0){
+    push_off();
+    int held = mycpu()->noff;
+    pop_off();
+
+    if(held == 1){
+      uint64 pa = swap_out();
+      if(pa != 0)
+        r = (struct run*)pa;
+    }
+    if(r == 0){
+      printf("kalloc: out of memory\n");
+      return 0;
+    }
+  }
+
   if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
+    memset((char*)r, 5, PGSIZE);
   return (void*)r;
 }

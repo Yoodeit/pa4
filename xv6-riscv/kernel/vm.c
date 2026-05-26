@@ -185,16 +185,25 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
-    if(PTE_FLAGS(*pte) == PTE_V)
-      panic("uvmunmap: not a leaf");
-    if(do_free){
-      uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      continue;
+    if(*pte & PTE_V){
+      if(PTE_FLAGS(*pte) == PTE_V)
+        panic("uvmunmap: not a leaf");
+      if(do_free){
+        uint64 pa = PTE2PA(*pte);
+        if(*pte & PTE_U)
+          lru_remove(pa);
+        kfree((void*)pa);
+      }
+      *pte = 0;
+    } else if(*pte & PTE_S){
+      // Swapped-out page: free swap slot
+      if(do_free){
+        int slot = PTE_SWAPSLOT(*pte);
+        bitmap_free(slot);
+      }
+      *pte = 0;
     }
-    *pte = 0;
   }
 }
 
@@ -225,6 +234,7 @@ uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
   memmove(mem, src, sz);
+  lru_add((uint64)mem, pagetable, 0);
 }
 
 // Allocate PTEs and physical memory to grow process from oldsz to
@@ -251,6 +261,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
+    lru_add((uint64)mem, pagetable, a);
   }
   return newsz;
 }
@@ -288,6 +299,9 @@ freewalk(pagetable_t pagetable)
       pagetable[i] = 0;
     } else if(pte & PTE_V){
       panic("freewalk: leaf");
+    } else if(pte & PTE_S){
+      // Swapped-out page: just clear the entry (swap slot already freed by uvmunmap)
+      pagetable[i] = 0;
     }
   }
   kfree((void*)pagetable);
@@ -319,9 +333,18 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      continue;
+    if(*pte & PTE_S){
+      // Swapped-out page in parent: swap it in first
+      pa = swap_in_page(old, i);
+      if(pa == 0)
+        goto err;
+      pte = walk(old, i, 0);
+      if(pte == 0)
+        goto err;
+    }
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -331,6 +354,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       kfree(mem);
       goto err;
     }
+    lru_add((uint64)mem, new, i);
   }
   return 0;
 
@@ -366,6 +390,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
+    if(pte != 0 && (*pte & PTE_V) == 0 && (*pte & PTE_S)){
+      if(swap_in_page(pagetable, va0) == 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+    }
     if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
        (*pte & PTE_W) == 0)
       return -1;
@@ -393,8 +422,20 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    if(pa0 == 0){
+      if(va0 >= MAXVA)
+        return -1;
+      pte_t *pte = walk(pagetable, va0, 0);
+      if(pte != 0 && (*pte & PTE_S)){
+        if(swap_in_page(pagetable, va0) == 0)
+          return -1;
+        pa0 = walkaddr(pagetable, va0);
+        if(pa0 == 0)
+          return -1;
+      } else {
+        return -1;
+      }
+    }
     n = PGSIZE - (srcva - va0);
     if(n > len)
       n = len;
@@ -420,8 +461,20 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   while(got_null == 0 && max > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    if(pa0 == 0){
+      if(va0>=MAXVA)
+        return -1;
+      pte_t *pte = walk(pagetable, va0, 0);
+      if(pte != 0 && (*pte & PTE_S)){
+        if(swap_in_page(pagetable, va0) == 0)
+          return -1;
+        pa0 = walkaddr(pagetable, va0);
+        if(pa0 == 0)
+          return -1;
+      } else {
+        return -1;
+      }
+    }
     n = PGSIZE - (srcva - va0);
     if(n > max)
       n = max;

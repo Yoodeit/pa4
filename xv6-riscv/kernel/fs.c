@@ -11,6 +11,7 @@
 
 #include "types.h"
 #include "riscv.h"
+#include "memlayout.h"
 #include "defs.h"
 #include "param.h"
 #include "stat.h"
@@ -705,6 +706,7 @@ swapread(uint64 ptr, int blkno)
   struct buf *bp;
   int i;
   const int BLKS_PER_PG = PGSIZE/BSIZE;
+  int kernel_dst = (ptr >= KERNBASE && ptr < PHYSTOP);
 
   if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
     panic("swapread: blkno exceeded range");
@@ -712,7 +714,7 @@ swapread(uint64 ptr, int blkno)
   for(i = 0; i < BLKS_PER_PG; i++){
     nr_sectors_read++;
     bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
-    if(either_copyout(1, ptr + i * BSIZE, bp->data, BSIZE) == -1)
+    if(either_copyout(kernel_dst ? 0 : 1, ptr + i * BSIZE, bp->data, BSIZE) == -1)
       panic("swapread: either_copyout failed");
     brelse(bp);
   }
@@ -725,6 +727,7 @@ swapwrite(uint64 ptr, int blkno)
   struct buf *bp;
   int i;
   const int BLKS_PER_PG = PGSIZE / BSIZE;
+  int kernel_src = (ptr >= KERNBASE && ptr < PHYSTOP);
 
   if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
     panic("swapwrite: blkno exceeded range");
@@ -732,7 +735,7 @@ swapwrite(uint64 ptr, int blkno)
   for(i = 0; i < BLKS_PER_PG; i++){
     nr_sectors_write++;
     bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
-    if(either_copyin(bp->data, 1, ptr + i * BSIZE, BSIZE) == -1)
+    if(either_copyin(bp->data, kernel_src ? 0 : 1, ptr + i * BSIZE, BSIZE) == -1)
       panic("swapwrite: either_copyin failed");
     bwrite(bp);
     brelse(bp);

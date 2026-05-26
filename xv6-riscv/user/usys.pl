@@ -36,7 +36,6 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
-# pa4: swap functions
 entry("swapread");
 entry("swapwrite");
 entry("swapstat");

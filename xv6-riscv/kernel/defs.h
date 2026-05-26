@@ -67,6 +67,15 @@ void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
 
+// swap.c
+void            swap_init(void);
+void            lru_init(void);
+void            lru_add(uint64, pagetable_t, uint64);
+void            lru_remove(uint64);
+uint64          swap_out(void);
+uint64          swap_in_page(pagetable_t, uint64);
+void            bitmap_free(int);
+
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);

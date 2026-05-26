@@ -510,12 +510,16 @@ sys_swapread(void)
 {
     uint64 ptr;
     int blkno;
+    struct proc *p = myproc();
 
     argaddr(0, &ptr);
     argint(1, &blkno);
 
+    if(ptr >= p->sz || ptr + PGSIZE < ptr || ptr + PGSIZE > p->sz)
+      return -1;
+
     swapread(ptr, blkno);
-    return 0;  // swapread는 void이므로 성공 시 0 반환
+    return 0;
 }
 
 uint64 
@@ -523,12 +527,16 @@ sys_swapwrite(void)
 {
     uint64 ptr;
     int blkno;
+    struct proc *p = myproc();
 
     argaddr(0, &ptr);
     argint(1, &blkno);
 
+    if(ptr >= p->sz || ptr + PGSIZE < ptr || ptr + PGSIZE > p->sz)
+      return -1;
+
     swapwrite(ptr, blkno);
-    return 0;  // swapwrite도 마찬가지로 0 반환
+    return 0;
 }
 
 uint64
